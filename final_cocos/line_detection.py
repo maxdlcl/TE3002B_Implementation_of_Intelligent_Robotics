@@ -1,5 +1,4 @@
 #!/usr/bin/env python3
-# line_error_node.py
 import rclpy
 import cv2 as cv
 from rclpy.node import Node
@@ -8,13 +7,15 @@ from sensor_msgs.msg import Image
 from std_msgs.msg import Float32, Int8, Bool
 
 # Definición del nodo para calcular el error de línea y detectar intersecciones
+# Procesa imágenes de la cámara del robot para detectar la posición de una línea respecto al centro de la imagen,
+# publicando el error normalizado, el lado de la línea (izquierda o derecha) y si hay agluna intersección
 class LineErrorNode(Node):
 
     def __init__(self) -> None:
         super().__init__('line_error_node')
         self.get_logger().info('Line error node initialized')
 
-        # Parametros del nodo
+        # Parametros del nodo para la detección de líneas
         self.declare_parameter('thresh',              55.0)   # umbral mínimo
         self.declare_parameter('roi_height',           0.20)  # % parte inferior
         self.declare_parameter('roi_width',            0.60)  # % ancho centrado
@@ -33,7 +34,7 @@ class LineErrorNode(Node):
 
         self.last_side = None  # último lado detectado (+1 derecha, -1 izq)
 
-        # Publicadores
+        # Publicadores: error de línea, lado de la línea e intersección
         self.pub_err          = self.create_publisher(Float32, '/line_error',     10)
         self.pub_side         = self.create_publisher(Int8,    '/line_side',      10)
         self.pub_intersection = self.create_publisher(Bool,    '/intersection',   10)
@@ -44,74 +45,72 @@ class LineErrorNode(Node):
 
     # Callback para procesar la imagen recibida
     def image_callback(self, msg: Image) -> None:
-        # 1. ROS ⇢ OpenCV
+        # Conversión de imagen de ROS a OpenCV
         try:
             frame = self.bridge.imgmsg_to_cv2(msg, desired_encoding='bgr8')
         except Exception as e:
             self.get_logger().error(f"Error al convertir imagen: {e}")
             return
 
-        # 2. ROI: parte inferior centrada
+        # Define la región de interés (ROI) en la parte inferior centrada
         h, w = frame.shape[:2]
         roi_h = frame[int(h * (1 - self.roi_height)) : h, :]
         roi_w = int(w * self.roi_width)
         start_x = (w - roi_w) // 2
         roi = roi_h[:, start_x : start_x + roi_w]
 
-        # 3. Conversión a escala de grises y umbral adaptativo
+        # Convierte a escala de grises y aplica umbral adaptativo mediante Otsu
         gray = cv.cvtColor(roi, cv.COLOR_BGR2GRAY)
         thr, _ = cv.threshold(gray, 0, 255,
                               cv.THRESH_BINARY_INV | cv.THRESH_OTSU)
-        #thr = max(90, min(thr, 100))                       # saturar umbral
-        print(thr)
 
         # Binarización inversa
         _, bin_img = cv.threshold(gray, thr, 255, cv.THRESH_BINARY_INV)
 
-        # 4. Detección de contornos
+        # Extrae contornos externos
         contours, _ = cv.findContours(bin_img, cv.RETR_EXTERNAL,
                                       cv.CHAIN_APPROX_SIMPLE)
 
-        # 4.0) Si no hay contornos, no hay línea
+        # Si no hay contornos, no hay línea
         if not contours:
             # Nada que publicar
             return
 
-        # 4.1) Contornos “grandes” → posible intersección
+        # Verifica si hay intersección por cantidad y tamaño de contornos
         big_contours = [c for c in contours if cv.contourArea(c) > self.min_area]
         is_intersection = len(big_contours) >= self.min_contours_int
         if is_intersection:
             self.pub_intersection.publish(Bool(data=is_intersection))
-            return
+            return # Se detectó intersección; no calcula error
         else:
             self.pub_intersection.publish(Bool(data=is_intersection))
 
-        # 5. Seleccionar el contorno más grande (la línea)
+        # Selecciona el contorno más grande (línea principal)
         biggest = max(contours, key=cv.contourArea)
         M = cv.moments(biggest)
 
-        # 5.0) Si el contorno es demasiado pequeño, no es válido
+        # Si el área del contorno es cero, no es válido
         if M['m00'] == 0:
             return  # contorno no válido
 
-        # 6. Calcular el centroide del contorno
+        # Calcula el centroide del contorno
         cx    = int(M['m10'] / M['m00'])
         w_roi = roi.shape[1]
 
         # Normalizar el error respecto al ancho de la ROI [-1, 1]
         error = (cx - w_roi // 2) / (w_roi // 2)
 
-        # Lado (signo)
+        # Determina el lado del desvío
         if error > 0:
             self.last_side = 1
         elif error < 0:
             self.last_side = -1
 
-        # 7. Publicar el error y el lado
+        # Publica error y lado
         self.pub_side.publish(Int8(data=int(self.last_side)))
         self.pub_err.publish(Float32(data=float(error)))
 
-        # ── DEBUG opcional ---------------------------------------------------
+        # DEBUG opcional
         #cv.circle(roi, (cx, int(M['m01']/M['m00'])), 4, (0,255,0), -1)
         #cv.imshow("ROI", roi); cv.imshow("bin", bin_img); cv.waitKey(1)
 

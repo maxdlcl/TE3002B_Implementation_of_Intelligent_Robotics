@@ -1,6 +1,4 @@
 #!/usr/bin/env python3
-# cmd_robot_node.py
-#
 # Genera /cmd_vel a partir de:
 #   • /line_error                   (Float32)  ─ error lateral de la línea
 #   • /follow_line      (Bool)      – velocidad normal con control lateral
@@ -27,7 +25,7 @@ from rclpy.duration import Duration
 from geometry_msgs.msg import Twist
 from std_msgs.msg import Float32, Bool, Int8
 
-# Enum para los estados de la FSM interna
+# Estados definidos para el control del movimiento
 class StateFSM(Enum):
     FOLLOW_LINE  = auto()
     REDUCE_VEL   = auto()
@@ -36,7 +34,6 @@ class StateFSM(Enum):
     GO_AHEAD     = auto()
     TURN_LEFT    = auto()
     TURN_RIGHT   = auto()
-
 
 # Nodo que convierte el error de línea y flags en mensajes Twist para /cmd_vel.
 class CmdRobotNode(Node):
@@ -67,11 +64,11 @@ class CmdRobotNode(Node):
         # Publicador de comandos de velocidad (/cmd_vel)
         self.pub_cmd = self.create_publisher(Twist, '/cmd_vel', 10)
 
-        # Suscripciones a mensajes de entrada
+        # Suscripciones a mensajes de entrada: datos de error y estado del robot
         self.create_subscription(Float32, '/line_error',   self.on_line_error,    10)
         self.create_subscription(Int8, '/line_side', self.on_line_side, 10)  # para compatibilidad
 
-        # Flags del MainController
+        # Subscripciones a flags del nodo controlador principal
         self.create_subscription(Bool, '/follow_line',     self.on_follow,        10)
         self.create_subscription(Bool, '/reduce_velocity', self.on_reduce,        10)
         self.create_subscription(Bool, '/stop',            self.on_stop,          10)
@@ -93,8 +90,7 @@ class CmdRobotNode(Node):
     def on_line_side(self, msg: Int8):
         self.last_side = msg.data
 
-
-    # Callbacks para los flags del MainController
+    # Callbacks para cambio de estado por flags
     def on_follow(self, msg: Bool):
         if msg.data:
             self.state = StateFSM.FOLLOW_LINE
@@ -137,19 +133,19 @@ class CmdRobotNode(Node):
         elif self.state == StateFSM.TURN_RIGHT:
             self.state = StateFSM.FOLLOW_LINE
 
-    # Callback para el error de línea
+    # Registro del último error de línea recibido
     def on_line_error(self, msg: Float32):
         self.error_line     = msg.data
         self.last_msg_time  = Clock().now()
 
-    # Generador de mensajes Twist
+    # Publicación directa de velocidad lineal y angular
     def generate_twist(self, linear: float, angular: float = 0.0) -> None:
         twist = Twist()
         twist.linear.x  = linear
         twist.angular.z = angular
         self.pub_cmd.publish(twist)
 
-    # Ley de control proporcional con zona muerta
+    # Control proporcional para seguir línea, con zona muerta
     def line_follow_twist(self, vmax: float, vmin: float, kp: float) -> None:
         err = abs(self.error_line)
         if err <= self.thresh:
@@ -160,10 +156,9 @@ class CmdRobotNode(Node):
             w = -kp * self.error_line
             self.generate_twist(vmax, w)
 
-    # Bucle de control principal
+    # Bucle principal de control de velocidad
     def control_loop(self) -> None:
-        k = 1.9/2.5
-  
+        k = 1.9/2.5 # # Factor para ajustar dinámicamente velocidades de giro
 
         # Selección del estado actual 
         if self.state in (StateFSM.STOP, StateFSM.SIGNAL_STOP):

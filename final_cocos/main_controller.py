@@ -24,7 +24,7 @@ from rclpy.node import Node
 from enum import IntEnum, auto
 from std_msgs.msg import Bool, Int8
 
-# Enum para los estados de la FSM interna
+# Estados posibles de la máquina de estados
 class StateFSM(IntEnum):
     FOLLOW_LINE  = auto()
     REDUCE_VEL   = auto()
@@ -36,7 +36,7 @@ class StateFSM(IntEnum):
     GIVE_WAY     = auto()
     ROAD_WORKS   = auto()
 
-# Enum para las señales de tráfico
+# Códigos de señales detectadas
 class SignalID(IntEnum):
     STOP        = 1
     AHEAD_ONLY  = 2
@@ -47,11 +47,12 @@ class SignalID(IntEnum):
 
 
 # Definición del nodo principal para el control de la FSM
+# Gestiona la lógica de control del robot en función de las señales de tráfico y colores detectados
 class MainController(Node):
     def __init__(self):
         super().__init__('main_controller')
 
-        # Publicadores
+        # Publicadores: flags básicos y de maniobras
         self.pub_follow_line = self.create_publisher(Bool, '/follow_line',      1)
         self.pub_reduce      = self.create_publisher(Bool, '/reduce_velocity',  1)
         self.pub_stop        = self.create_publisher(Bool, '/stop',             1)
@@ -63,14 +64,14 @@ class MainController(Node):
         self.pub_give_way    = self.create_publisher(Bool, '/give_way',      1)
         self.pub_road_works  = self.create_publisher(Bool, '/road_works',    1)
 
-        # Subscripciones
+        # Subscripciones: señales y colores detectados e intersecciones detectadas
         self.create_subscription(Bool, '/detected_color',  self.detected_color_cb, 10)
         self.create_subscription(Int8, '/color',           self.color_cb,          10)
         self.create_subscription(Bool, '/detected_signal', self.detected_signal_cb,10)
         self.create_subscription(Int8, '/signal',          self.signal_cb,         10)
         self.create_subscription(Bool, '/intersection',    self.intersection_cb,   10)
 
-        # FSM: flags y estado inicial
+        # Inicialización de variables internas de estado
         self.detected_color   = False
         self.detected_signal  =	False
         self.intersection     = False
@@ -105,7 +106,7 @@ class MainController(Node):
     def signal_cb(self, msg):           self.signal          = msg.data
     def intersection_cb(self, msg):     self.intersection    = msg.data
 
-    # Helper para publicar los flags básicos
+    # Publica flags básicos según el estado actual
     def publish_basic_flags(self):
         self.msg['f'].data = (self.state == StateFSM.FOLLOW_LINE)
         self.msg['r'].data = (self.state in
@@ -120,14 +121,14 @@ class MainController(Node):
         self.pub_give_way.publish(self.msg['gw'])
         self.pub_road_works.publish(self.msg['rw'])
 
-    # Helper para limpiar los flags de maniobra
+    # Limpia los flags de maniobra activa
     def clear_turn_flags(self):
         for k, pub in (('ga',self.pub_go_ahead), ('tl',self.pub_turn_left), ('tr',self.pub_turn_right)):
             if self.msg[k].data:
                 self.msg[k].data = False
                 pub.publish(self.msg[k])
 
-    # FMS loop
+    # Lógica principal de la FSM
     def loop(self):
         now = time.time()
 
@@ -143,7 +144,7 @@ class MainController(Node):
                 if self.pending_maneuver is None:
                     self.pending_maneuver = 'ahead'
 
-        # 2. Señal STOP → Alto temporal (2 s)
+        # 2. Ejecución de señal STOP
         if self.state == StateFSM.SIGNAL_STOP:
             if self.stop_t0 is None:
                 self.stop_t0 = now
@@ -155,12 +156,12 @@ class MainController(Node):
                 self.pub_signal_stop.publish(self.msg['ss'])
                 self.state = StateFSM.FOLLOW_LINE
 
-        # 3. Semáforo rojo → STOP
+        # 3. Semáforo rojo activa STOP
         elif self.state == StateFSM.STOP:
             if self.detected_color and self.color == 3:
                 self.state = StateFSM.FOLLOW_LINE
 
-        # 4. REDUCE_VEL ───
+        # 4. Estado de reducción de velocidad
         elif self.state == StateFSM.REDUCE_VEL:
             if self.detected_color and self.color == 1:
                 self.state = StateFSM.STOP
@@ -209,7 +210,7 @@ class MainController(Node):
             self.maneuver_t0 = now
 
 
-        # 8. Publicación de flags básicos
+        # 8. Publicación de flags básicos según estado
         self.publish_basic_flags()
 
 
@@ -224,5 +225,3 @@ def main(args=None):
 # Ejecución del script principal
 if __name__ == '__main__':
     main()
-
-
