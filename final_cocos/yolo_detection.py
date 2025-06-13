@@ -33,7 +33,7 @@ class YoloDetection(Node):
         self.create_subscription(Image, '/video_source/raw', self.camera_callback, 10)
 
         # Timer de inferenciadame
-        self.timer = self.create_timer(1/20, self.timer_callback)
+        self.timer = self.create_timer(1/30, self.timer_callback)
 
         # Umbral de confianza
         self.min_confidence = 0.5
@@ -60,7 +60,7 @@ class YoloDetection(Node):
 
         detected_signal = False
 
-        #
+        # Procesamiento de detecciones
         boxes = result[0].boxes
         for box in boxes:
             class_id = int(box.cls[0])
